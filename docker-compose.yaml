@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  surreal_db:
+    container_name: surreal_db
+    image: surrealdb/surrealdb:v1.2.0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    command:
+      - start
+      - --user=root
+      - --pass=root
+      - file:/data/transactions_machine.db
+    restart: always
+
+networks:
+  default:
+    driver: bridge
+    name: rustapi
