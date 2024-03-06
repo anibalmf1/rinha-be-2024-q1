@@ -12,7 +12,7 @@ mod requests;
 
 use models::{CustomerURL};
 use requests::{TransactionPayload};
-use config::Config;
+use config::{Config, LOGO};
 use db::Database;
 use crate::responses::{CreateTransactionResponse, GetStatementResponse};
 
@@ -91,18 +91,17 @@ async fn get_statement(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    std::env::set_var("RUST_LOG", "debug");
-    env_logger::init();
+    println!("{}", LOGO);
 
-    let config = envy::from_env::<Config>();
-    if config.is_err() {
-        panic!("{}", format!("invalid config - {:?}", config.err()))
-    }
+    let config = envy::from_env::<Config>().unwrap_or_else(|err|
+        panic!("{}", format!("invalid config - {:?}", err))
+    );
 
-    let db = Database::init(&config.unwrap())
+    let db = Database::init(&config)
         .await.expect("could not connect to database - {}");
 
-    HttpServer::new(move || App::new()
+    let server_url = &config.server_url;
+    let server = HttpServer::new(move || App::new()
         .service(create_transaction)
         .service(get_statement)
         .app_data(Data::new(db.clone()))
@@ -119,8 +118,10 @@ async fn main() -> std::io::Result<()> {
             })
         )
     )
-        .bind("localhost:8080")?
-        .run()
-        .await
-}
+        .bind(server_url)?
+        .run();
 
+    println!("listening on {}", server_url);
+
+    server.await
+}

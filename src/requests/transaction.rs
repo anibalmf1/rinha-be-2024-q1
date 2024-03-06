@@ -7,12 +7,19 @@ use crate::models::{Transaction, TransactionCache};
 
 #[derive(Validate, Deserialize, Serialize, Clone)]
 pub struct TransactionPayload {
+
     #[validate(range(min=1))]
+    #[serde(rename(deserialize = "valor"))]
     pub amount: i64,
+
     #[validate(custom(function = "validate_transaction_type"))]
+    #[serde(rename(deserialize = "tipo"))]
     pub transaction_type: char,
+
     #[validate(length(min=1, max=10))]
+    #[serde(rename(deserialize = "descricao"))]
     pub description: String,
+
 }
 
 fn validate_transaction_type(value: &char) -> Result<(), ValidationError> {
