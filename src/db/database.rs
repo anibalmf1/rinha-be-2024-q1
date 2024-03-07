@@ -1,92 +1,124 @@
-use surrealdb::engine::remote::ws::{Client, Ws};
-use surrealdb::{Error, Surreal};
-use surrealdb::opt::auth::Root;
-use crate::config::Config;
-use crate::models::Transaction;
-use crate::models::transaction::Customer;
+use deadpool_postgres::{Pool};
+use tokio_postgres::NoTls;
+use uuid::Uuid;
+use log::error;
 
-const CUSTOMER_TABLE: &'static str = "customers";
-const TRANSACTIONS_TABLE: &'static str = "transactions";
+use crate::errors::Error;
+use crate::config::Config;
+use crate::errors::Error::{Default, NotFound};
+use crate::models::{Transaction, TransactionCache};
+use crate::models::transaction::{Customer, CustomerLean};
 
 #[derive(Clone)]
 pub struct Database {
-    pub client: Surreal<Client>,
+    pub pool: Pool
 }
 
 impl Database {
-    pub async fn init(config: &Config) -> Result<Self, Error> {
-        let client = Surreal::new::<Ws>(&config.db_host).await?;
-        client.signin(Root {
-            username: &config.db_user,
-            password: &config.db_pass,
-        }).await.expect("Failed to connect to the database");
+    pub async fn init(config: &Config) -> Result<Database, ()> {
+        let mut pg_cfg = deadpool_postgres::Config::new();
+        let host = config.db_host.split(":").collect::<Vec<&str>>();
+        pg_cfg.host = Option::from(String::from(host[0]));
+        if host.len() > 1 {
+            pg_cfg.port = Option::from(host[1].parse::<u16>().unwrap());
+        }
+        pg_cfg.user = Option::from(config.db_user.clone());
+        pg_cfg.password = Option::from(config.db_pass.clone());
+        pg_cfg.dbname = Option::from(config.db_name.clone());
 
-        client.use_ns(&config.db_namespace).use_db(&config.db_name).await.unwrap();
+        let pool = pg_cfg.create_pool(None, NoTls).unwrap();
 
-        let db = Database{ client };
-
-        db.setup().await;
+        let db = Database{ pool };
 
         Ok(db)
     }
 
-    async fn setup(&self) {
-        let customer1 = self.client.select::<Option<Customer>>((CUSTOMER_TABLE, 1)).await.unwrap();
+    pub async fn get_customer_by_id(&self, customer_id: i32) -> Result<Customer, Error> {
+        let pg_client = self.pool.get().await.unwrap();
 
-        if !customer1.is_none() {
-            return
+        let row = pg_client.query_one(
+            "select credit_limit, balance, latest_transactions \
+            from customer \
+            where id = $1",
+            &[&customer_id],
+        ).await;
+
+        if row.is_err() {
+            return Err(NotFound)
         }
 
-        self.client
-            .create::<Option<Customer>>((CUSTOMER_TABLE, 1))
-            .content(Customer { limit: 100000, balance: 0, transactions: Vec::new() }
-        ).await.expect("couldn't create customer record");
+        let row = row.unwrap();
 
-        self.client
-            .create::<Option<Customer>>((CUSTOMER_TABLE, 2))
-            .content(Customer { limit: 80000, balance: 0, transactions: Vec::new() }
-        ).await.expect("couldnt create customer record");
+        let customer = Customer::from(row);
 
-        self.client
-            .create::<Option<Customer>>((CUSTOMER_TABLE, 3))
-            .content(Customer { limit: 1000000, balance: 0, transactions: Vec::new() }
-        ).await.expect("couldnt create customer record");
-
-        self.client
-            .create::<Option<Customer>>((CUSTOMER_TABLE, 4))
-            .content(Customer { limit: 10000000, balance: 0, transactions: Vec::new() }
-        ).await.expect("couldnt create customer record");
-
-        self.client
-            .create::<Option<Customer>>((CUSTOMER_TABLE, 5))
-            .content(Customer { limit: 500000, balance: 0, transactions: Vec::new() }
-        ).await.expect("couldnt create customer record");
-    }
-
-    pub async fn get_customer_by_id(&self, customer_id: i32) -> Option<Customer> {
-        self.client.select((CUSTOMER_TABLE, customer_id)).await.ok()?
+        Ok(customer)
     }
 
     pub async fn create_transaction(
         &self,
         transaction: Transaction,
-    )  {
-        self.client
-            .create::<Vec<Transaction>>(TRANSACTIONS_TABLE)
-            .content(transaction)
-            .await
-            .expect("couldn't create transaction record");
-    }
+    ) -> Result<CustomerLean, Error> {
+        let mut pg_client = self.pool.get().await.unwrap();
+        let db_transaction = pg_client.transaction().await.unwrap();
 
-    pub async fn update_customer(
-        &self,
-        customer_id: i32,
-        customer: &Box<Customer>,
-    ) {
-        self.client
-            .update::<Option<Customer>>((CUSTOMER_TABLE, customer_id))
-            .content(customer)
-            .await
-            .expect("couldn't update customer table");
+        let mut operation_amount = transaction.amount;
+        if transaction.transaction_type == "d" {
+            operation_amount = operation_amount * -1;
+        }
+
+        let transaction_json = serde_json::to_value(
+            TransactionCache::from_transaction(&transaction),
+        ).unwrap();
+
+        let result = db_transaction.query_one("\
+            update customer \
+            set balance = balance + $1::bigint, \
+                latest_transactions = $2::jsonb || \
+                case \
+                    when jsonb_array_length(latest_transactions) >= 10 then coalesce(latest_transactions - (-1), '[]'::jsonb) \
+                    else coalesce(latest_transactions, '[]') \
+                end \
+            where id = $3::bigint \
+            returning \
+            credit_limit, balance",
+   &[&operation_amount, &transaction_json, &transaction.customer_id]
+        ).await;
+
+        if result.is_err() {
+            error!("fail to update customer: {}", result.unwrap_err());
+            db_transaction.rollback().await.expect("fail to rollback");
+
+            return Err(Default)
+        }
+
+        let customer_row = result.unwrap();
+
+        let result = db_transaction.execute(
+            "insert into transactions (\
+            id, customer_id, amount, transaction_type, description\
+            ) values (\
+            $1::uuid, $2::bigint, $3::bigint, $4::varchar, $5::varchar\
+            )",
+            &[
+                &Uuid::new_v4(),
+                &transaction.customer_id,
+                &transaction.amount,
+                &transaction.transaction_type.to_string(),
+                &transaction.description,
+            ]
+        ).await;
+
+        if result.is_err() {
+            error!("fail to insert transaction: {}", result.unwrap_err());
+            db_transaction.rollback().await.expect("fail to rollback");
+            return Err(Default)
+        }
+        
+        db_transaction.commit().await.expect("fail commit");
+
+        Ok(CustomerLean{
+            limit: customer_row.get(0),
+            balance: customer_row.get(1),
+        })
     }
 }

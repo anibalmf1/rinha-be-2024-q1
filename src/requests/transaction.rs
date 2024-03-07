@@ -1,9 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::sql::Datetime;
 use validator::{Validate, ValidationError};
 
-use crate::models::{Transaction, TransactionCache};
+use crate::models::{Transaction};
 
 #[derive(Validate, Deserialize, Serialize, Clone)]
 pub struct TransactionPayload {
@@ -35,18 +34,9 @@ impl TransactionPayload {
         Transaction{
             customer_id,
             amount: self.amount,
-            transaction_type: self.transaction_type,
+            transaction_type: String::from(self.transaction_type),
             description: self.description.clone(),
-            created_at: Datetime(created_at),
-        }
-    }
-
-    pub fn to_model_cache(&self, created_at: DateTime<Utc>) -> TransactionCache {
-        TransactionCache{
-            amount: self.amount,
-            transaction_type: self.transaction_type,
-            description: self.description.clone(),
-            created_at: Datetime(created_at),
+            created_at,
         }
     }
 }

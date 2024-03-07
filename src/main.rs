@@ -9,11 +9,14 @@ mod db;
 mod config;
 mod responses;
 mod requests;
+mod errors;
+mod serializers;
 
 use models::{CustomerURL};
 use requests::{TransactionPayload};
 use config::{Config, LOGO};
 use db::Database;
+use crate::errors::Error;
 use crate::responses::{CreateTransactionResponse, GetStatementResponse};
 
 #[post("/clientes/{customer_id}/transacoes")]
@@ -33,39 +36,23 @@ async fn create_transaction(
         return HttpResponse::NotFound().into()
     }
 
-    let customer_opt = db.get_customer_by_id(customer_id).await;
-    if customer_opt.is_none() {
-        return HttpResponse::NotFound().into()
-    }
-
-    let mut customer = customer_opt.unwrap();
-
-    let new_balance = match payload.transaction_type {
-        'c' => customer.balance + payload.amount,
-        _ => customer.balance - payload.amount
-    };
-
-    if new_balance < (customer.limit as i64) * -1 {
-        return HttpResponse::UnprocessableEntity().into()
-    }
-
-    customer.balance = new_balance;
-
     let time_now = Utc::now();
 
-    db.create_transaction(payload.to_model(customer_id as i64, time_now)).await;
+    let customer_lean = db.create_transaction(
+        payload.to_model(customer_id as i64, time_now),
+    ).await;
 
-    let mut customer_box = Box::new(customer);
-
-    if customer_box.transactions.len() >= 10 {
-        customer_box.transactions.pop();
+    match customer_lean {
+        Ok(response) => {
+            HttpResponse::Ok().json(CreateTransactionResponse::from_model(&response))
+        }
+        Err(err) => {
+            match err {
+                Error::NotFound => {HttpResponse::NotFound().into()}
+                Error::Default => {HttpResponse::UnprocessableEntity().into()}
+            }
+        }
     }
-
-    customer_box.transactions.insert(0, payload.to_model_cache(time_now));
-
-    db.update_customer(customer_url.customer_id, &customer_box).await;
-
-    HttpResponse::Ok().json(CreateTransactionResponse::from_model(customer_box))
 }
 
 #[get("/clientes/{customer_id}/extrato")]
@@ -80,7 +67,7 @@ async fn get_statement(
     }
 
     let customer_opt = db.get_customer_by_id(customer_id).await;
-    if customer_opt.is_none() {
+    if customer_opt.is_err() {
         return HttpResponse::NotFound().into()
     }
 
@@ -91,16 +78,18 @@ async fn get_statement(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    env_logger::init();
     println!("{}", LOGO);
 
     let config = envy::from_env::<Config>().unwrap_or_else(|err|
         panic!("{}", format!("invalid config - {:?}", err))
     );
 
-    let db = Database::init(&config)
-        .await.expect("could not connect to database - {}");
-
     let server_url = &config.server_url;
+
+    let db = Database::init(&config).await.unwrap();
+
+
     let server = HttpServer::new(move || App::new()
         .service(create_transaction)
         .service(get_statement)

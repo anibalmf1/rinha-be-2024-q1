@@ -15,26 +15,23 @@ services:
       resources:
         limits:
           cpus: "0.50"
-          memory: "336MB"
+          memory: "136MB"
 
-  surreal_db:
-    container_name: surreal_db
-    image: surrealdb/surrealdb:v1.2.0
+  postgres:
+    container_name: postgres
+    image: postgres:16.2-bookworm
     ports:
-      - "8000:8000"
+      - "5432:5432"
     volumes:
-      - ./data:/data
-    command:
-      - start
-      - --user=root
-      - --pass=root
-      - file:/data/transactions_machine.db
+      - ./init-db/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     restart: always
+    environment:
+      POSTGRES_PASSWORD: "postgres"
     deploy:
       resources:
         limits:
           cpus: "0.80"
-          memory: "150MB"
+          memory: "350MB"
 
   nilapi01:
     container_name: nilapi01
@@ -43,13 +40,12 @@ services:
       - "8080:8080"
     environment:
       SERVER_URL: 0.0.0.0:8080
-      DB_HOST: surreal_db:8000
-      DB_NAMESPACE: rinha
-      DB_NAME: transactions_machine
-      DB_USER: root
-      DB_PASS: root
+      DB_HOST: postgres:5432
+      DB_NAME: postgres
+      DB_USER: postgres
+      DB_PASS: postgres
     depends_on:
-      - surreal_db
+      - postgres
     deploy:
       resources:
         limits:
@@ -63,14 +59,12 @@ services:
       - "8081:8081"
     environment:
       SERVER_URL: 0.0.0.0:8081
-      DB_HOST: surreal_db:8000
-      DB_NAMESPACE: rinha
-      DB_NAME: transactions_machine
-      DB_USER: root
-      DB_PASS: root
+      DB_HOST: postgres:5432
+      DB_NAME: postgres
+      DB_USER: postgres
+      DB_PASS: postgres
     depends_on:
-      - surreal_db
-      - nilapi01
+      - postgres
     deploy:
       resources:
         limits:
