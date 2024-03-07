@@ -108,6 +108,7 @@ async fn main() -> std::io::Result<()> {
         )
     )
         .bind(server_url)?
+        .workers(4)
         .run();
 
     println!("listening on {}", server_url);

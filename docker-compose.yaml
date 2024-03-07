@@ -14,7 +14,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.50"
+          cpus: "0.45"
           memory: "136MB"
 
   postgres:
@@ -30,8 +30,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.80"
-          memory: "350MB"
+          cpus: "0.75"
+          memory: "374MB"
 
   nilapi01:
     container_name: nilapi01
@@ -49,8 +49,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
-          memory: "32MB"
+          cpus: "0.15"
+          memory: "20MB"
 
   nilapi02:
     container_name: nilapi02
@@ -68,8 +68,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
-          memory: "32MB"
+          cpus: "0.15"
+          memory: "20MB"
 
 networks:
   default:

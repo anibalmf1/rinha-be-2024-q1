@@ -1,7 +1,6 @@
 use deadpool_postgres::{Pool};
 use tokio_postgres::NoTls;
 use uuid::Uuid;
-use log::error;
 
 use crate::errors::Error;
 use crate::config::Config;
@@ -25,6 +24,7 @@ impl Database {
         pg_cfg.user = Option::from(config.db_user.clone());
         pg_cfg.password = Option::from(config.db_pass.clone());
         pg_cfg.dbname = Option::from(config.db_name.clone());
+        pg_cfg.get_pool_config().max_size = 16;
 
         let pool = pg_cfg.create_pool(None, NoTls).unwrap();
 
@@ -85,7 +85,6 @@ impl Database {
         ).await;
 
         if result.is_err() {
-            error!("fail to update customer: {}", result.unwrap_err());
             db_transaction.rollback().await.expect("fail to rollback");
 
             return Err(Default)
@@ -109,7 +108,6 @@ impl Database {
         ).await;
 
         if result.is_err() {
-            error!("fail to insert transaction: {}", result.unwrap_err());
             db_transaction.rollback().await.expect("fail to rollback");
             return Err(Default)
         }
